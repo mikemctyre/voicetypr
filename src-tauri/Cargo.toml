@@ -74,7 +74,7 @@ core-graphics = "0.24"
 media-remote = "0.3"
 
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
-whisper-rs = { version = "0.15.1", features = ["vulkan"] }
+whisper-rs = { version = "0.15.1" }
 
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
 whisper-rs = { version = "0.15.1" }
@@ -105,3 +105,14 @@ tauri-plugin-store = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-os = "2"
 tauri-plugin-single-instance = "2"
+
+[patch.crates-io]
+# Fix for tao#1140: assert!(flush_paint_messages) panics on Windows when the
+# event loop is re-entered during WM_PAINT teardown (WebView2 shutdown race).
+# Changed assert! to a guarded if so re-entrant calls are handled gracefully.
+tao = { path = "../../tao" }
+# Fix for bindgen 0.71 / Windows MSVC opaque-struct bug: whisper_full_params is
+# generated as a 1-byte placeholder but still has a 296-byte size assertion,
+# causing a compile-time underflow. Local fork uses pre-generated Windows
+# bindings instead of running bindgen on MSVC targets.
+whisper-rs-sys = { path = "../../whisper-rs-sys" }
