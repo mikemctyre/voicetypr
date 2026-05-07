@@ -748,9 +748,18 @@ pub async fn start_recording(
         ],
     );
 
-    // If we're stuck in Error, recover to Idle before attempting a new start
+    // If we're stuck in Error, recover to Idle before attempting a new start.
+    // Also stop the audio recorder if it's still running — errors during Starting
+    // don't always clean up the CPAL stream, causing "Already recording" on the
+    // next attempt.
     let current_state = crate::get_recording_state(&app);
     if matches!(current_state, crate::RecordingState::Error) {
+        if let Ok(mut recorder) = state.inner().0.lock() {
+            if recorder.is_recording() {
+                log::warn!("Error recovery: stopping stale audio stream before reset");
+                let _ = recorder.stop_recording();
+            }
+        }
         crate::update_recording_state(
             &app,
             crate::RecordingState::Idle,
