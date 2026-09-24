@@ -68,7 +68,7 @@ tauri-plugin-notification = "2.3.3"
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.15.1", features = ["metal"] }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
-tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "18ffb9a201fbf6fedfaa382fd4b92315ea30ab1a" }
 tauri-plugin-macos-permissions = "2"
 core-graphics = "0.24"
 media-remote = "0.3"
@@ -110,9 +110,10 @@ tauri-plugin-single-instance = "2"
 # Fix for tao#1140: assert!(flush_paint_messages) panics on Windows when the
 # event loop is re-entered during WM_PAINT teardown (WebView2 shutdown race).
 # Changed assert! to a guarded if so re-entrant calls are handled gracefully.
-tao = { path = "../../tao" }
+# Pinned to the fork commit on branch windows-tao-1140-fix.
+tao = { git = "https://github.com/mikemctyre/tao", rev = "6df70792e29ec29706a3e2bb6f13b0a04cab62c4" }
 # Fix for bindgen 0.71 / Windows MSVC opaque-struct bug: whisper_full_params is
 # generated as a 1-byte placeholder but still has a 296-byte size assertion,
 # causing a compile-time underflow. Local fork uses pre-generated Windows
 # bindings instead of running bindgen on MSVC targets.
-whisper-rs-sys = { path = "../../whisper-rs-sys" }
+whisper-rs-sys = { git = "https://github.com/mikemctyre/whisper-rs-sys", rev = "d98d677fe5b6d4dba84710c7abdd77d16277cfd0" }
