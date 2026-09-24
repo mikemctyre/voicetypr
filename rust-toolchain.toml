@@ -1,0 +1,10 @@
+# Pins the Rust toolchain this fork is built and tested with, so a fresh clone
+# resolves the same compiler on any machine instead of whatever "stable" means
+# that day. Bump deliberately, in its own commit, after a full build passes.
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"
+# clippy: CI runs `cargo clippy -- -D warnings`; rustfmt: `cargo fmt` checks.
+components = ["clippy", "rustfmt"]
+# The fork's supported build target (Windows x64, MSVC).
+targets = ["x86_64-pc-windows-msvc"]
