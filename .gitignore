@@ -51,3 +51,4 @@ agent-docs/
 sidecar/ffmpeg/vendor
 opencodetmp
 pi-session-*.html
+src-tauri/windows/resources/vc_redist.x64.exe
