@@ -45,6 +45,11 @@ static SENDER: OnceLock<Mutex<tokio::sync::mpsc::UnboundedSender<serde_json::Val
 /// to Starting consumes it. A Starting with this unset was begun by the
 /// owner's own hotkey, so the previous fleet capture id no longer applies.
 static FLEET_STARTING: AtomicBool = AtomicBool::new(false);
+/// The single start reservation (review R2, H2): at most one fleet start is
+/// in flight. Taken atomically when a start is accepted, released when that
+/// start finishes (started, refused or failed). A second start arriving while
+/// it is held is ignored, so it can never overwrite the first one's capture id.
+static START_RESERVED: AtomicBool = AtomicBool::new(false);
 static WARNED_NO_ENDPOINT: AtomicBool = AtomicBool::new(false);
 
 fn instance_id() -> &'static str {
@@ -63,6 +68,16 @@ fn valid_capture_id(s: &str) -> bool {
         && s.len() <= 128
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+}
+
+/// Take the start reservation. True only for the one caller that flips it.
+fn try_reserve_start(flag: &AtomicBool) -> bool {
+    flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+}
+
+fn release_start(flag: &AtomicBool) {
+    flag.store(false, Ordering::SeqCst);
 }
 
 /// True when argv carries a fleet command. lib.rs checks this first.
@@ -90,7 +105,9 @@ pub fn handle_argv(app: &AppHandle, argv: &[String]) {
     let state = get_recording_state(app);
     match verb {
         "start" => {
-            if matches!(state, RecordingState::Idle | RecordingState::Error) {
+            if matches!(state, RecordingState::Idle | RecordingState::Error)
+                && try_reserve_start(&START_RESERVED)
+            {
                 let app_handle = app.clone();
                 let capture = capture.to_string();
                 tauri::async_runtime::spawn(async move {
@@ -105,6 +122,7 @@ pub fn handle_argv(app: &AppHandle, argv: &[String]) {
                             "fleet_ipc: start {} refused -- no fresh cached licence (the licence prompt would raise the window)",
                             capture
                         );
+                        release_start(&START_RESERVED);
                         push_state(&app_handle, None);
                         return;
                     }
@@ -119,10 +137,15 @@ pub fn handle_argv(app: &AppHandle, argv: &[String]) {
                         FLEET_STARTING.store(false, Ordering::SeqCst);
                         update_recording_state(&app_handle, RecordingState::Error, Some(e));
                     }
+                    release_start(&START_RESERVED);
                 });
                 return;
             } else {
-                log::info!("fleet_ipc: start {} ignored in {:?}", capture, state);
+                log::info!(
+                    "fleet_ipc: start {} ignored in {:?} (or another fleet start is in flight)",
+                    capture,
+                    state
+                );
             }
         }
         "stop" => match state {
@@ -355,6 +378,21 @@ mod tests {
         ];
         assert!(is_fleet_argv(&argv));
         assert!(!is_fleet_argv(&["voicetypr.exe".to_string()]));
+    }
+
+    #[test]
+    fn only_one_start_holds_the_reservation() {
+        let flag = AtomicBool::new(false);
+        assert!(try_reserve_start(&flag));
+        assert!(
+            !try_reserve_start(&flag),
+            "a second start while one is in flight is refused"
+        );
+        release_start(&flag);
+        assert!(
+            try_reserve_start(&flag),
+            "the next start after release may proceed"
+        );
     }
 
     #[test]
