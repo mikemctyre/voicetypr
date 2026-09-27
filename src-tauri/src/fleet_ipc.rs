@@ -41,6 +41,10 @@ static CAPTURE: Mutex<Option<String>> = Mutex::new(None);
 static INSTANCE: OnceLock<String> = OnceLock::new();
 static SENDER: OnceLock<Mutex<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>> =
     OnceLock::new();
+/// Set just before a fleet start calls start_recording; the next transition
+/// to Starting consumes it. A Starting with this unset was begun by the
+/// owner's own hotkey, so the previous fleet capture id no longer applies.
+static FLEET_STARTING: AtomicBool = AtomicBool::new(false);
 static WARNED_NO_ENDPOINT: AtomicBool = AtomicBool::new(false);
 
 fn instance_id() -> &'static str {
@@ -80,22 +84,43 @@ pub fn handle_argv(app: &AppHandle, argv: &[String]) {
         );
         return;
     }
-    if let Ok(mut c) = CAPTURE.lock() {
-        *c = Some(capture.to_string());
-    }
+    // The capture id is attribution for the recording it started. It changes
+    // ONLY when a fleet start actually begins one -- never on stop or state,
+    // and never on a start that is ignored or refused.
     let state = get_recording_state(app);
     match verb {
         "start" => {
             if matches!(state, RecordingState::Idle | RecordingState::Error) {
-                log::info!("fleet_ipc: start {} from {:?}", capture, state);
                 let app_handle = app.clone();
+                let capture = capture.to_string();
                 tauri::async_runtime::spawn(async move {
+                    // RULES 3: start_recording shows and focuses the main window
+                    // when the licence check fails. A fleet start therefore
+                    // runs only on a fresh cached licence that permits
+                    // recording, so start_recording takes its cached path and
+                    // never reaches that window call. Otherwise it is refused
+                    // here; the owner's own hotkey refreshes the licence.
+                    if !cached_licence_permits_recording(&app_handle).await {
+                        log::warn!(
+                            "fleet_ipc: start {} refused -- no fresh cached licence (the licence prompt would raise the window)",
+                            capture
+                        );
+                        push_state(&app_handle, None);
+                        return;
+                    }
+                    if let Ok(mut c) = CAPTURE.lock() {
+                        *c = Some(capture.clone());
+                    }
+                    FLEET_STARTING.store(true, Ordering::SeqCst);
+                    log::info!("fleet_ipc: start {}", capture);
                     let recorder_state = app_handle.state::<RecorderState>();
                     if let Err(e) = start_recording(app_handle.clone(), recorder_state).await {
                         log::error!("fleet_ipc: start failed: {}", e);
+                        FLEET_STARTING.store(false, Ordering::SeqCst);
                         update_recording_state(&app_handle, RecordingState::Error, Some(e));
                     }
                 });
+                return;
             } else {
                 log::info!("fleet_ipc: start {} ignored in {:?}", capture, state);
             }
@@ -126,6 +151,20 @@ pub fn handle_argv(app: &AppHandle, argv: &[String]) {
         }
     }
     push_state(app, None);
+}
+
+/// True only when the cached licence is still fresh and is Licensed or Trial,
+/// i.e. exactly when start_recording would skip its licence prompt.
+async fn cached_licence_permits_recording(app: &AppHandle) -> bool {
+    let app_state = app.state::<AppState>();
+    let cache = app_state.license_cache.read().await;
+    match cache.as_ref() {
+        Some(c) if c.is_valid() => !matches!(
+            c.status.status,
+            crate::license::LicenseState::Expired | crate::license::LicenseState::None
+        ),
+        _ => false,
+    }
 }
 
 /// Start the push worker, the event listeners and the heartbeat. Call once from setup.
@@ -162,7 +201,23 @@ pub fn install(app: &AppHandle) {
     });
 
     let a = app.clone();
-    app.listen_any("recording-state-changed", move |_event| {
+    app.listen_any("recording-state-changed", move |event| {
+        // The payload's own state, not a re-read: a fast Starting -> Recording
+        // must still be seen as a Starting.
+        let starting = serde_json::from_str::<serde_json::Value>(event.payload())
+            .ok()
+            .and_then(|v| {
+                v.get("state")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s == "starting")
+            })
+            .unwrap_or(false);
+        if starting && !FLEET_STARTING.swap(false, Ordering::SeqCst) {
+            // A hotkey recording: it has no fleet capture id.
+            if let Ok(mut c) = CAPTURE.lock() {
+                *c = None;
+            }
+        }
         push_state(&a, None)
     });
     let a = app.clone();
