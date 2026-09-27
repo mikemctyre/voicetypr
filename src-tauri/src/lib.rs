@@ -16,6 +16,7 @@ mod ai;
 mod audio;
 mod commands;
 mod ffmpeg;
+mod fleet_ipc;
 mod license;
 mod media;
 mod menu;
@@ -174,8 +175,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // When a second instance is launched, bring the existing window to focus
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // --fleet: a Nexus Voice command. Never show or focus (RULES 3).
+            if fleet_ipc::is_fleet_argv(&argv) {
+                fleet_ipc::handle_argv(app, &argv);
+                return;
+            }
+            // Any other second launch brings the existing window to focus
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
                 let _ = win.set_focus();
@@ -447,6 +453,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // Initialize recorder state (kept separate for backwards compatibility)
             app.manage(RecorderState(Mutex::new(AudioRecorder::new())));
+
+            // Nexus Voice fleet IPC: state/transcript pushes and cold --fleet argv
+            fleet_ipc::install(app.handle());
 
             // Create device watcher in deferred state - will be started after mic permission granted
             // This prevents early mic permission prompts from CPAL's input_devices() enumeration
