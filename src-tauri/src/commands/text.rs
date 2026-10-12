@@ -179,6 +179,22 @@ fn insert_via_clipboard(
         }
     };
 
+    // Fleet (2026-10-11): a picture waiting on the clipboard -- a screenshot
+    // Synergy just delivered from the other computer -- survives dictation.
+    // Only text was ever saved, and with keep_transcription_in_clipboard on
+    // nothing was, so the next dictation erased the screenshot (caught live:
+    // image landed 11:08:38 PM, a transcript replaced it 11:09:11 PM). An
+    // image-only clipboard is restored after the paste whatever that setting
+    // says; a text clipboard keeps the setting's behavior.
+    let previous_clipboard_image = if clipboard.get_text().is_err() {
+        match clipboard.get_image() {
+            Ok(image) => Some(image.to_owned_img()),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
     let insertion_result: Result<(), String> = (|| {
         // Set transcribed text as clipboard content
         clipboard
@@ -259,7 +275,17 @@ fn insert_via_clipboard(
         Ok(())
     })();
 
-    if !keep_transcription_in_clipboard {
+    if let Some(image) = previous_clipboard_image {
+        if insertion_result.is_ok() {
+            // The target app reads the clipboard when it handles the pasted
+            // keystroke; give it that moment before the picture goes back.
+            thread::sleep(Duration::from_millis(400));
+            match clipboard.set_image(image) {
+                Ok(_) => log::info!("Restored the clipboard image after paste"),
+                Err(e) => log::error!("Failed to restore the clipboard image: {}", e),
+            }
+        }
+    } else if !keep_transcription_in_clipboard {
         if insertion_result.is_ok() {
             if let Some(previous_text) = previous_clipboard_text {
                 if let Err(e) = clipboard.set_text(&previous_text) {
